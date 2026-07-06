@@ -8,19 +8,101 @@
 #include "logger.h"
 #include "scheduler.h"
 
+#define HELP_CMD_WIDTH 46
+#define HELP_DESC_WIDTH 50
+#define INFO_KEY_WIDTH 12
+#define INFO_VALUE_WIDTH 48
+#define HELP_INNER_WIDTH (HELP_CMD_WIDTH + HELP_DESC_WIDTH + 5)
+#define INFO_INNER_WIDTH (INFO_KEY_WIDTH + INFO_VALUE_WIDTH + 5)
+
 static void on_sigint(int sig) {
     (void)sig;
     container_request_interrupt();
 }
 
-static void print_rule(void) {
-    printf("======================================================================\n");
+static const char *safe_text(const char *text) {
+    return (text != NULL) ? text : "";
 }
 
-static void print_section(const char *title) {
-    print_rule();
-    printf("%s\n", title);
-    print_rule();
+static void print_repeat(const char *glyph, int count) {
+    for (int i = 0; i < count; i++) {
+        fputs(glyph, stdout);
+    }
+}
+
+static void print_full_border(const char *left, int inner_width, const char *right) {
+    fputs(left, stdout);
+    print_repeat("─", inner_width + 2);
+    fputs(right, stdout);
+    printf("\n");
+}
+
+static void print_full_row(int inner_width, const char *text) {
+    printf("│ %-*.*s │\n",
+           inner_width,
+           inner_width,
+           safe_text(text));
+}
+
+static void print_split_border(int left_width,
+                               int right_width,
+                               const char *left,
+                               const char *middle,
+                               const char *right) {
+    fputs(left, stdout);
+    print_repeat("─", left_width + 2);
+    fputs(middle, stdout);
+    print_repeat("─", right_width + 2);
+    fputs(right, stdout);
+    printf("\n");
+}
+
+static void print_two_col_row(int left_width,
+                              int right_width,
+                              const char *left_text,
+                              const char *right_text) {
+    printf("│ %-*.*s │ %-*.*s │\n",
+           left_width,
+           left_width,
+           safe_text(left_text),
+           right_width,
+           right_width,
+           safe_text(right_text));
+}
+
+static void print_help_row(const char *command, const char *description) {
+    print_two_col_row(HELP_CMD_WIDTH, HELP_DESC_WIDTH, command, description);
+}
+
+static void print_help_section_row(const char *section) {
+    print_full_row(HELP_INNER_WIDTH, section);
+}
+
+static void print_info_row(const char *label, const char *value) {
+    print_two_col_row(INFO_KEY_WIDTH, INFO_VALUE_WIDTH, label, value);
+}
+
+static void print_scheduler_status(void) {
+    char slice_text[32];
+    char mode_text[32];
+    char profile_text[96];
+
+    snprintf(mode_text,
+             sizeof(mode_text),
+             "mode=%s",
+             scheduler_is_enabled() ? "enabled" : "disabled");
+    snprintf(slice_text, sizeof(slice_text), "slice=%ums", scheduler_get_time_slice_ms());
+    snprintf(profile_text, sizeof(profile_text), "profile=%s", scheduler_profile());
+
+    printf("\n");
+    print_full_border("╭", INFO_INNER_WIDTH, "╮");
+    print_full_row(INFO_INNER_WIDTH, "Scheduler Status");
+    print_split_border(INFO_KEY_WIDTH, INFO_VALUE_WIDTH, "├", "┬", "┤");
+    print_info_row("mode", mode_text);
+    print_info_row("slice", slice_text);
+    print_info_row("profile", profile_text);
+    print_split_border(INFO_KEY_WIDTH, INFO_VALUE_WIDTH, "╰", "┴", "╯");
+    printf("\n");
 }
 
 static void print_banner(void) {
@@ -34,43 +116,90 @@ static void print_banner(void) {
 
 static int parse_command(char *line, char **args, int max_args) {
     int count = 0;
-    char *token = strtok(line, " ");
+    char *cursor = line;
 
-    while (token != NULL && count < max_args) {
-        args[count++] = token;
-        token = strtok(NULL, " ");
+    while (*cursor != '\0' && count < max_args) {
+        while (*cursor == ' ' || *cursor == '\t') {
+            cursor++;
+        }
+        if (*cursor == '\0') {
+            break;
+        }
+
+        if (*cursor == '"' || *cursor == '\'') {
+            char quote = *cursor++;
+            args[count++] = cursor;
+            while (*cursor != '\0' && *cursor != quote) {
+                cursor++;
+            }
+            if (*cursor == quote) {
+                *cursor++ = '\0';
+            }
+        } else {
+            args[count++] = cursor;
+            while (*cursor != '\0' && *cursor != ' ' && *cursor != '\t') {
+                cursor++;
+            }
+            if (*cursor != '\0') {
+                *cursor++ = '\0';
+            }
+        }
     }
 
     return count;
 }
 
 static void print_help(void) {
-    print_section("Command Reference");
-    printf("Lifecycle\n");
-    printf("  run   [--cpu SEC] [--mem MB] [--pids N] <name> <hostname> <rootfs> <command> [args...]\n");
-    printf("  runbg [--cpu SEC] [--mem MB] [--pids N] <name> <hostname> <rootfs> <command> [args...]\n");
-    printf("  create [--cpu SEC] [--mem MB] [--pids N] [name] [hostname] [rootfs]\n");
-    printf("  start <id>    start a created container with namespaces and isolated rootfs\n");
-    printf("  stop <id>     stop a running container\n");
-    printf("  delete <id>   delete a stopped container record\n");
-    printf("  list          show all container records\n");
+    print_full_border("╭", HELP_INNER_WIDTH, "╮");
+    print_full_row(HELP_INNER_WIDTH, "Command Reference");
+    print_split_border(HELP_CMD_WIDTH, HELP_DESC_WIDTH, "├", "┬", "┤");
+    print_help_row("Command", "What it does");
+    print_split_border(HELP_CMD_WIDTH, HELP_DESC_WIDTH, "├", "┼", "┤");
+
+    print_help_section_row("Lifecycle");
+    print_split_border(HELP_CMD_WIDTH, HELP_DESC_WIDTH, "├", "┼", "┤");
+    print_help_row("run [flags] <name> <host> <rootfs> <cmd...>",
+                   "Run a container in the foreground.");
+    print_help_row("runbg [flags] <name> <host> <rootfs> <cmd...>",
+                   "Run a container in the background.");
+    print_help_row("create [flags] [name] [host] [rootfs]",
+                   "Create a container record without starting it.");
+    print_help_row("start <id> | stop <id> | delete <id>",
+                   "Control a created or running container.");
+    print_help_row("list",
+                   "Show the container inventory table.");
+
+    print_split_border(HELP_CMD_WIDTH, HELP_DESC_WIDTH, "├", "┼", "┤");
+    print_help_section_row("Scheduling");
+    print_split_border(HELP_CMD_WIDTH, HELP_DESC_WIDTH, "├", "┼", "┤");
+    print_help_row("sched on | off | status",
+                   "Toggle the round-robin scheduler or inspect it.");
+    print_help_row("sched slice <ms>",
+                   "Set the scheduler time slice in milliseconds.");
+
+    print_split_border(HELP_CMD_WIDTH, HELP_DESC_WIDTH, "├", "┼", "┤");
+    print_help_section_row("Observability");
+    print_split_border(HELP_CMD_WIDTH, HELP_DESC_WIDTH, "├", "┼", "┤");
+    print_help_row("logs [-f] [-n N] [id]",
+                   "View all logs or filter by container id.");
+    print_help_row("stats",
+                   "Show stats for every running container.");
+    print_help_row("stats <id>",
+                   "Show stats for one running container.");
+    print_help_row("stats --watch <sec> [id]",
+                   "Refresh stats live until you press Ctrl+C.");
+
+    print_split_border(HELP_CMD_WIDTH, HELP_DESC_WIDTH, "├", "┼", "┤");
+    print_help_section_row("General");
+    print_split_border(HELP_CMD_WIDTH, HELP_DESC_WIDTH, "├", "┼", "┤");
+    print_help_row("--cpu SEC | --mem MB | --pids N",
+                   "Optional limit flags for run, runbg, and create.");
+    print_help_row("quoted arguments",
+                   "Use quotes when command arguments contain spaces.");
+    print_help_row("help | exit",
+                   "Show this table or leave the simulator.");
+    print_split_border(HELP_CMD_WIDTH, HELP_DESC_WIDTH, "╰", "┴", "╯");
     printf("\n");
-    printf("Scheduling\n");
-    printf("  sched on\n");
-    printf("  sched off\n");
-    printf("  sched slice <ms>\n");
-    printf("  sched status\n");
-    printf("\n");
-    printf("Observability\n");
-    printf("  logs [-f] [-n N] [id]           view overall or container-specific logs\n");
-    printf("  stats                           show stats for all running containers\n");
-    printf("  stats <id>                      show stats for one container\n");
-    printf("  stats --watch <sec>             live stats for all running containers\n");
-    printf("  stats --watch <sec> <id>        live stats for one container\n");
-    printf("\n");
-    printf("General\n");
-    printf("  help\n");
-    printf("  exit\n\n");
 }
 
 static int parse_limit_flags(char **args, int argc, int *index, ResourceConfig *limits) {
@@ -280,10 +409,7 @@ int main(void) {
                 printf("[manager] scheduler slice set to %ums\n\n", scheduler_get_time_slice_ms());
                 log_event_type("SCHEDULER_UPDATED", "time_slice_ms=%u", scheduler_get_time_slice_ms());
             } else if (strcmp(args[1], "status") == 0) {
-                printf("[manager] scheduler: %s, slice=%ums, mode=%s\n\n",
-                       scheduler_profile(),
-                       scheduler_get_time_slice_ms(),
-                       scheduler_is_enabled() ? "enabled" : "disabled");
+                print_scheduler_status();
             } else {
                 printf("[error] usage: sched on|off|slice <ms>|status\n\n");
             }

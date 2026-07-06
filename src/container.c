@@ -21,14 +21,138 @@
 #define METADATA_FILE "containers.meta"
 #define METADATA_FILE_TMP "containers.meta.tmp"
 #define DEFAULT_CONTAINER_COMMAND "/bin/sh"
+#define DETAIL_KEY_WIDTH 12
+#define DETAIL_VALUE_WIDTH 60
+#define INVENTORY_COLUMN_COUNT 8
+#define STATS_COLUMN_COUNT 9
+
+static const int DETAIL_WIDTHS[] = {DETAIL_KEY_WIDTH, DETAIL_VALUE_WIDTH};
+static const int INVENTORY_WIDTHS[INVENTORY_COLUMN_COUNT] = {14, 12, 8, 7, 10, 18, 16, 22};
+static const int STATS_WIDTHS[STATS_COLUMN_COUNT] = {14, 7, 5, 8, 7, 8, 8, 5, 18};
+static const char *const INVENTORY_HEADERS[INVENTORY_COLUMN_COUNT] = {
+    "ID", "NAME", "STATE", "PID", "HOST", "ROOTFS", "COMMAND", "LIMITS"
+};
+static const char *const STATS_HEADERS[STATS_COLUMN_COUNT] = {
+    "ID", "PID", "STATE", "CPU(s)", "CPU(%)", "RSS(MB)", "VSZ(MB)", "THR", "COMMAND"
+};
 
 static Container *head = NULL;
 static Container *tail = NULL;
 static int next_sequence = 1;
 static volatile sig_atomic_t g_interrupt_requested = 0;
 
-static void print_cli_rule(void) {
-    printf("========================================================================================================================\n");
+static const char *safe_text(const char *text) {
+    return (text != NULL) ? text : "";
+}
+
+static void print_cli_repeat(const char *glyph, int count) {
+    for (int i = 0; i < count; i++) {
+        fputs(glyph, stdout);
+    }
+}
+
+static int table_inner_width(const int *widths, size_t count) {
+    int total = 0;
+
+    for (size_t i = 0; i < count; i++) {
+        total += widths[i] + 2;
+    }
+
+    if (count > 0) {
+        total += (int)(count - 1);
+    }
+
+    return total;
+}
+
+static void print_cli_full_border(int inner_width, const char *left, const char *right) {
+    fputs(left, stdout);
+    print_cli_repeat("─", inner_width + 2);
+    fputs(right, stdout);
+    printf("\n");
+}
+
+static void print_cli_full_row(int inner_width, const char *text) {
+    printf("│ %-*.*s │\n",
+           inner_width,
+           inner_width,
+           safe_text(text));
+}
+
+static void print_cli_table_border(const int *widths,
+                                   size_t count,
+                                   const char *left,
+                                   const char *middle,
+                                   const char *right) {
+    fputs(left, stdout);
+
+    for (size_t i = 0; i < count; i++) {
+        print_cli_repeat("─", widths[i] + 2);
+        fputs((i + 1 < count) ? middle : right, stdout);
+    }
+
+    printf("\n");
+}
+
+static void print_cli_table_row(const char *const *values, const int *widths, size_t count) {
+    fputs("│", stdout);
+
+    for (size_t i = 0; i < count; i++) {
+        printf(" %-*.*s │",
+               widths[i],
+               widths[i],
+               safe_text((values != NULL) ? values[i] : NULL));
+    }
+
+    printf("\n");
+}
+
+static void print_detail_box_header(const char *title) {
+    int inner_width = table_inner_width(DETAIL_WIDTHS, sizeof(DETAIL_WIDTHS) / sizeof(DETAIL_WIDTHS[0]));
+
+    print_cli_full_border(inner_width, "╭", "╮");
+    print_cli_full_row(inner_width, title);
+    print_cli_table_border(DETAIL_WIDTHS,
+                           sizeof(DETAIL_WIDTHS) / sizeof(DETAIL_WIDTHS[0]),
+                           "├",
+                           "┬",
+                           "┤");
+}
+
+static void print_detail_row(const char *label, const char *value) {
+    const char *values[] = {label, value};
+
+    print_cli_table_row(values,
+                        DETAIL_WIDTHS,
+                        sizeof(DETAIL_WIDTHS) / sizeof(DETAIL_WIDTHS[0]));
+}
+
+static void print_detail_box_footer(void) {
+    print_cli_table_border(DETAIL_WIDTHS,
+                           sizeof(DETAIL_WIDTHS) / sizeof(DETAIL_WIDTHS[0]),
+                           "╰",
+                           "┴",
+                           "╯");
+}
+
+static void print_table_message(const int *widths, size_t count, const char *message) {
+    int inner_width = table_inner_width(widths, count);
+
+    print_cli_full_row(inner_width, message);
+}
+
+static void print_inventory_table_header(void) {
+    print_cli_table_border(INVENTORY_WIDTHS, INVENTORY_COLUMN_COUNT, "╭", "┬", "╮");
+    print_cli_table_row(INVENTORY_HEADERS, INVENTORY_WIDTHS, INVENTORY_COLUMN_COUNT);
+    print_cli_table_border(INVENTORY_WIDTHS, INVENTORY_COLUMN_COUNT, "├", "┼", "┤");
+}
+
+static void print_inventory_table_footer(void) {
+    print_cli_table_border(INVENTORY_WIDTHS, INVENTORY_COLUMN_COUNT, "╰", "┴", "╯");
+}
+
+static void print_stats_footer(void) {
+    print_cli_table_border(STATS_WIDTHS, STATS_COLUMN_COUNT, "╰", "┴", "╯");
 }
 
 void container_request_interrupt(void) {
@@ -415,6 +539,7 @@ static int stop_container_process(Container *container, int quiet) {
 
 static void print_container_banner(const Container *container, pid_t namespace_pid) {
     char pid_text[16];
+    char pid_value[48];
     char limits_text[128];
 
     if (container->pid > 0) {
@@ -424,26 +549,26 @@ static void print_container_banner(const Container *container, pid_t namespace_p
     }
 
     printf("\n");
-    print_cli_rule();
-    printf("Container Summary\n");
-    print_cli_rule();
-    printf("%-10s : %s\n", "id", container->id);
-    printf("%-10s : %s\n", "name", container->name);
-    printf("%-10s : %s\n", "pid", pid_text);
-    printf("%-10s : %s\n", "hostname", container->hostname);
-    printf("%-10s : %s\n", "rootfs", container->rootfs);
-    printf("%-10s : %s\n", "command", container->command_line);
-    resource_format_limits(&container->resource_limits, limits_text, sizeof(limits_text));
-    printf("%-10s : %s\n", "limits", limits_text);
-    printf("%-10s : %s\n", "isolate", namespace_profile());
-    printf("%-10s : %s\n", "fs mode", filesystem_profile());
-    printf("%-10s : %s\n", "net mode", network_profile());
-    printf("%-10s : %s\n", "res mode", resource_profile());
+    print_detail_box_header("Container Summary");
+    print_detail_row("id", container->id);
+    print_detail_row("state", state_to_string(container->state));
+    print_detail_row("name", container->name);
+    print_detail_row("hostname", container->hostname);
     if (namespace_pid > 0) {
-        printf("%-10s : %d\n", "ns pid", (int)namespace_pid);
+        snprintf(pid_value, sizeof(pid_value), "host pid %s | ns pid %d", pid_text, (int)namespace_pid);
+        print_detail_row("pid", pid_value);
+    } else {
+        print_detail_row("pid", pid_text);
     }
-    printf("%-10s : %s\n", "state", state_to_string(container->state));
-    print_cli_rule();
+    print_detail_row("rootfs", container->rootfs);
+    print_detail_row("command", container->command_line);
+    resource_format_limits(&container->resource_limits, limits_text, sizeof(limits_text));
+    print_detail_row("limits", limits_text);
+    print_detail_row("isolate", namespace_profile());
+    print_detail_row("fs mode", filesystem_profile());
+    print_detail_row("net mode", network_profile());
+    print_detail_row("res mode", resource_profile());
+    print_detail_box_footer();
     printf("\n");
 }
 
@@ -838,82 +963,72 @@ int container_list(void) {
     poll_states();
 
     printf("\n");
-    print_cli_rule();
-    printf("Container Inventory\n");
-    print_cli_rule();
-    printf("Isolation  : %s\n", namespace_profile());
-    printf("Filesystem : %s\n", filesystem_profile());
-    printf("Network    : %s\n", network_profile());
-    printf("Resources  : %s\n", resource_profile());
-    print_cli_rule();
-    printf("%-16s %-14s %-8s %-14s %-24s %-10s %-22s %-22s\n",
-           "ID",
-           "NAME",
-           "PID",
-           "HOSTNAME",
-           "ROOTFS",
-           "STATE",
-           "COMMAND",
-           "LIMITS");
-    print_cli_rule();
+    print_detail_box_header("Container Inventory");
+    print_detail_row("Isolation", namespace_profile());
+    print_detail_row("Filesystem", filesystem_profile());
+    print_detail_row("Network", network_profile());
+    print_detail_row("Resources", resource_profile());
+    print_detail_box_footer();
+    print_inventory_table_header();
 
     for (Container *cursor = head; cursor != NULL; cursor = cursor->next) {
         char pid_text[16];
-
         if (cursor->pid > 0) {
             snprintf(pid_text, sizeof(pid_text), "%d", (int)cursor->pid);
         } else {
             copy_string(pid_text, sizeof(pid_text), "-");
         }
-
         char limits_text[128];
+        const char *row[INVENTORY_COLUMN_COUNT];
 
         resource_format_limits(&cursor->resource_limits, limits_text, sizeof(limits_text));
-        printf("%-16s %-14s %-8s %-14s %-24s %-10s %-22s %-22s\n",
-               cursor->id,
-               cursor->name,
-               pid_text,
-               cursor->hostname,
-               cursor->rootfs,
-               state_to_string(cursor->state),
-               cursor->command_line,
-               limits_text);
+        row[0] = cursor->id;
+        row[1] = cursor->name;
+        row[2] = state_to_string(cursor->state);
+        row[3] = pid_text;
+        row[4] = cursor->hostname;
+        row[5] = cursor->rootfs;
+        row[6] = cursor->command_line;
+        row[7] = limits_text;
+        print_cli_table_row(row, INVENTORY_WIDTHS, INVENTORY_COLUMN_COUNT);
         count++;
     }
 
     if (count == 0) {
-        printf("no containers found\n");
+        print_table_message(INVENTORY_WIDTHS, INVENTORY_COLUMN_COUNT, "no containers found");
     }
 
+    print_inventory_table_footer();
     printf("\n");
     return 0;
 }
 
 static void print_stats_header(void) {
+    char profile_text[160];
+    int inner_width = table_inner_width(STATS_WIDTHS, STATS_COLUMN_COUNT);
+
     printf("\n");
-    print_cli_rule();
-    printf("Container Monitoring\n");
-    print_cli_rule();
-    printf("Monitor profile: %s\n", monitor_profile());
-    print_cli_rule();
-    printf("%-16s %-8s %-6s %-10s %-8s %-10s %-10s %-6s %-24s\n",
-           "ID",
-           "PID",
-           "STATE",
-           "CPU(s)",
-           "CPU(%)",
-           "RSS(MB)",
-           "VSZ(MB)",
-           "THR",
-           "COMMAND");
-    print_cli_rule();
+    print_cli_full_border(inner_width, "╭", "╮");
+    print_cli_full_row(inner_width, "Container Monitoring");
+    print_cli_full_border(inner_width, "├", "┤");
+    snprintf(profile_text, sizeof(profile_text), "Monitor profile: %s", monitor_profile());
+    print_cli_full_row(inner_width, profile_text);
+    print_cli_table_border(STATS_WIDTHS, STATS_COLUMN_COUNT, "├", "┬", "┤");
+    print_cli_table_row(STATS_HEADERS, STATS_WIDTHS, STATS_COLUMN_COUNT);
+    print_cli_table_border(STATS_WIDTHS, STATS_COLUMN_COUNT, "├", "┼", "┤");
 }
 
 static void print_stats_row(const Container *container, const MonitorStats *stats, int has_cpu_pct, double cpu_pct) {
     double rss_mb = 0.0;
     double vsize_mb = 0.0;
+    char pid_text[16];
     char state_text[8];
+    char cpu_text[16];
     char cpu_pct_text[16];
+    char rss_text[16];
+    char vsize_text[16];
+    char thread_text[16];
+    const char *row[STATS_COLUMN_COUNT];
 
     if (container == NULL || stats == NULL) {
         return;
@@ -921,7 +1036,12 @@ static void print_stats_row(const Container *container, const MonitorStats *stat
 
     rss_mb = (double)stats->rss_bytes / (1024.0 * 1024.0);
     vsize_mb = (double)stats->vsize_bytes / (1024.0 * 1024.0);
+    snprintf(pid_text, sizeof(pid_text), "%d", (int)stats->pid);
     snprintf(state_text, sizeof(state_text), "%c", stats->state);
+    snprintf(cpu_text, sizeof(cpu_text), "%.2f", stats->cpu_seconds);
+    snprintf(rss_text, sizeof(rss_text), "%.1f", rss_mb);
+    snprintf(vsize_text, sizeof(vsize_text), "%.1f", vsize_mb);
+    snprintf(thread_text, sizeof(thread_text), "%ld", stats->threads);
 
     if (!has_cpu_pct) {
         snprintf(cpu_pct_text, sizeof(cpu_pct_text), "-");
@@ -929,16 +1049,16 @@ static void print_stats_row(const Container *container, const MonitorStats *stat
         snprintf(cpu_pct_text, sizeof(cpu_pct_text), "%.1f", cpu_pct);
     }
 
-    printf("%-16s %-8d %-6s %-10.2f %-8s %-10.1f %-10.1f %-6ld %-24s\n",
-           container->id,
-           (int)stats->pid,
-           state_text,
-           stats->cpu_seconds,
-           cpu_pct_text,
-           rss_mb,
-           vsize_mb,
-           stats->threads,
-           container->command_line);
+    row[0] = container->id;
+    row[1] = pid_text;
+    row[2] = state_text;
+    row[3] = cpu_text;
+    row[4] = cpu_pct_text;
+    row[5] = rss_text;
+    row[6] = vsize_text;
+    row[7] = thread_text;
+    row[8] = container->command_line;
+    print_cli_table_row(row, STATS_WIDTHS, STATS_COLUMN_COUNT);
 }
 
 int container_stats(const char *id) {
@@ -969,6 +1089,7 @@ int container_stats(const char *id) {
 
     print_stats_header();
     print_stats_row(container, &stats, 0, 0.0);
+    print_stats_footer();
     printf("\n");
     return 0;
 }
@@ -995,9 +1116,10 @@ int container_stats_all(void) {
     }
 
     if (!any) {
-        printf("no running containers\n");
+        print_table_message(STATS_WIDTHS, STATS_COLUMN_COUNT, "no running containers");
     }
 
+    print_stats_footer();
     printf("\n");
     return 0;
 }
@@ -1098,6 +1220,7 @@ int container_stats_watch(const char *id, unsigned int interval_sec) {
         printf("[watch] interval=%us (Ctrl+C to stop)\n", interval_sec);
         print_stats_header();
         print_stats_row(container, &stats, has_cpu_pct, cpu_pct);
+        print_stats_footer();
         printf("\n");
 
         prev.pid = stats.pid;
@@ -1185,9 +1308,10 @@ int container_stats_all_watch(unsigned int interval_sec) {
         }
 
         if (!any) {
-            printf("no running containers\n");
+            print_table_message(STATS_WIDTHS, STATS_COLUMN_COUNT, "no running containers");
         }
 
+        print_stats_footer();
         printf("\n");
         sleep_interval(interval_sec);
     }

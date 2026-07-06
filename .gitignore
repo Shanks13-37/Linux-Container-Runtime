@@ -6,6 +6,7 @@ bin/
 # runtime output
 container.log
 containers.meta
+containers.meta.tmp
 rootfs/
 /tmp/container-sim/
 
