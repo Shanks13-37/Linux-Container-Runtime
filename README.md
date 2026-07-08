@@ -107,8 +107,9 @@ Resource flags: `--cpu SEC`, `--mem MB`, `--pids N` (apply to `run`, `runbg`, an
 
 ---
 
-## Structure
+## Project structure
 
+```
 Linux-Container-Runtime/
 ├── src/
 │   ├── main.c              # CLI entrypoint and command parsing
@@ -145,17 +146,13 @@ Linux-Container-Runtime/
 │
 ├── bin/                     # compiled workload binaries (build output)
 ├── .github/                 # CI workflow (runs `make` on push/PR)
-├── .vscode/
-├── .codex/
-├── .agents/
 │
 ├── Makefile
 ├── README.md
 ├── LICENSE
-├── .gitignore
-├── containers.meta          # runtime state (regenerated, not committed)
-├── containers.meta.tmp      # atomic-write temp file (regenerated)
-└── container.log            # event log (regenerated)
+└── .gitignore
+```
+---
 
 ## License
 
